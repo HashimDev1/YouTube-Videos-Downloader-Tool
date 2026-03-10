@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-const downloadsDir = path.join(__dirname, "downloads");
+const downloadsDir = process.env.DOWNLOADS_DIR || "/tmp/downloads";
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }

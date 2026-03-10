@@ -3,9 +3,7 @@ services:
     name: youtube-downloader
     runtime: node
     plan: free
-    buildCommand: |
-      npm install
-      pip install -r requirements.txt
+    buildCommand: npm install && python3 -m pip install -r requirements.txt
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
