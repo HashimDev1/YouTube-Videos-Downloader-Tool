@@ -73,21 +73,6 @@
         margin-bottom: 24px;
       }
 
-      .badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 16px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.65);
-        border: 1px solid rgba(120, 140, 180, 0.16);
-        box-shadow: var(--shadow-md);
-        color: var(--accent);
-        font-size: 13px;
-        font-weight: 700;
-        margin-bottom: 14px;
-      }
-
       .hero h1 {
         margin: 0 0 10px;
         font-size: clamp(32px, 4vw, 54px);
@@ -191,7 +176,7 @@
 
       .controls {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(4, 1fr);
         gap: 16px;
         margin-top: 16px;
       }
@@ -221,6 +206,11 @@
         color: var(--text);
         font-size: 15px;
         font-weight: 600;
+      }
+
+      .field select:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
       }
 
       .field select option {
@@ -482,6 +472,10 @@
         .grid-mini {
           grid-template-columns: 1fr;
         }
+
+        .controls {
+          grid-template-columns: repeat(2, 1fr);
+        }
       }
 
       @media (max-width: 640px) {
@@ -519,7 +513,8 @@
         <h1>Download YouTube Videos<br />with a cleaner experience</h1>
         <p>
           Paste a YouTube link, fetch the preview, choose format and available
-          quality, then download in a smooth and professional interface.
+          quality, and optionally split long MP4 videos into smaller chunk
+          files.
         </p>
       </div>
 
@@ -551,6 +546,23 @@
                 <option value="720">720p</option>
                 <option value="1080" selected>1080p</option>
                 <option value="best">Best</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="chunkEnabled">Chunk Video</label>
+              <select id="chunkEnabled">
+                <option value="false" selected>No</option>
+                <option value="true">Yes</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="chunkDuration">Chunk Length</label>
+              <select id="chunkDuration">
+                <option value="90">1.5 min</option>
+                <option value="120" selected>2 min</option>
+                <option value="180">3 min</option>
               </select>
             </div>
           </div>
@@ -589,8 +601,8 @@
                 <div class="v">MP4 video and MP3 audio</div>
               </div>
               <div class="mini-card">
-                <div class="k">Quality Selection</div>
-                <div class="v">Choose from detected options</div>
+                <div class="k">Chunk Mode</div>
+                <div class="v">Split long MP4 into parts</div>
               </div>
             </div>
           </div>
@@ -635,8 +647,8 @@
               </a>
 
               <div class="hint" id="hint">
-                MP3 disables quality selection. MP4 uses the selected video
-                quality.
+                MP4 can be downloaded normally or split into chunks. MP3
+                disables quality selection and chunking.
               </div>
             </div>
           </div>
@@ -650,6 +662,8 @@
       const startBtn = document.getElementById("startBtn");
       const formatSelect = document.getElementById("format");
       const qualitySelect = document.getElementById("quality");
+      const chunkEnabledSelect = document.getElementById("chunkEnabled");
+      const chunkDurationSelect = document.getElementById("chunkDuration");
 
       const previewCard = document.getElementById("previewCard");
       const thumbnail = document.getElementById("thumbnail");
@@ -714,6 +728,7 @@
           }
 
           btn.addEventListener("click", () => {
+            if (formatSelect.value === "mp3") return;
             selectedQuality = q;
             qualitySelect.value = q;
             renderQualities(detectedQualities);
@@ -760,6 +775,28 @@
         renderQualities(finalQualities);
       }
 
+      function syncChunkUi() {
+        const isMp3 = formatSelect.value === "mp3";
+        const chunkEnabled = chunkEnabledSelect.value === "true";
+
+        qualitySelect.disabled = isMp3;
+        chunkEnabledSelect.disabled = isMp3;
+        chunkDurationSelect.disabled = isMp3 || !chunkEnabled;
+
+        const chips = qualitiesList.querySelectorAll(".quality-chip");
+        chips.forEach((chip) => {
+          chip.disabled = isMp3;
+          chip.style.opacity = isMp3 ? "0.5" : "1";
+          chip.style.pointerEvents = isMp3 ? "none" : "auto";
+        });
+
+        hint.textContent = isMp3
+          ? "MP3 selected. Audio download does not use video quality or chunking."
+          : chunkEnabled
+            ? "MP4 chunk mode is enabled. Final download will be a ZIP containing video parts."
+            : "MP4 selected. Pick one of the available video qualities or enable chunking.";
+      }
+
       async function fetchVideoInfo() {
         const url = urlInput.value.trim();
 
@@ -803,8 +840,9 @@
               : ["720", "1080", "best"];
 
           syncQualitySelect(qualities);
+          syncChunkUi();
           setStatus(
-            "Video details loaded. Choose quality and download.",
+            "Video details loaded. Choose options and start download.",
             "success",
           );
         } catch (err) {
@@ -817,20 +855,14 @@
       }
 
       formatSelect.addEventListener("change", () => {
-        const isMp3 = formatSelect.value === "mp3";
-        qualitySelect.disabled = isMp3;
-
-        const chips = qualitiesList.querySelectorAll(".quality-chip");
-        chips.forEach((chip) => {
-          chip.disabled = isMp3;
-          chip.style.opacity = isMp3 ? "0.5" : "1";
-          chip.style.pointerEvents = isMp3 ? "none" : "auto";
-        });
-
-        hint.textContent = isMp3
-          ? "MP3 selected. Audio download does not use video quality."
-          : "MP4 selected. Pick one of the available video qualities.";
+        if (formatSelect.value === "mp3") {
+          chunkEnabledSelect.value = "false";
+        }
+        syncChunkUi();
       });
+
+      chunkEnabledSelect.addEventListener("change", syncChunkUi);
+      chunkDurationSelect.addEventListener("change", syncChunkUi);
 
       qualitySelect.addEventListener("change", () => {
         selectedQuality = qualitySelect.value;
@@ -858,6 +890,9 @@
         const url = urlInput.value.trim();
         const format = formatSelect.value;
         const quality = qualitySelect.value;
+        const chunk_enabled =
+          format === "mp4" && chunkEnabledSelect.value === "true";
+        const chunk_duration_seconds = Number(chunkDurationSelect.value);
 
         if (!url) {
           setStatus("Please enter a URL.", "error");
@@ -879,7 +914,13 @@
           const res = await fetch("/api/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url, format, quality }),
+            body: JSON.stringify({
+              url,
+              format,
+              quality,
+              chunk_enabled,
+              chunk_duration_seconds,
+            }),
           });
 
           const data = await res.json();
@@ -903,8 +944,19 @@
               const progress = progressData.progress || 0;
               progressBar.style.width = `${progress}%`;
               statusPercent.textContent = `${Math.round(progress)}%`;
+
+              const statusMap = {
+                queued: "Queued...",
+                downloading: "Downloading video...",
+                splitting: "Splitting video into chunks...",
+                archiving: "Preparing ZIP file...",
+                finished: "Done.",
+                error: progressData.error || "Download failed",
+              };
+
               setStatus(
-                `Status: ${progressData.status}`,
+                statusMap[progressData.status] ||
+                  `Status: ${progressData.status}`,
                 progressData.status === "error" ? "error" : "",
               );
 
@@ -912,7 +964,13 @@
                 clearInterval(pollInterval);
                 progressBar.style.width = "100%";
                 statusPercent.textContent = "100%";
-                setStatus("Download complete. Click below.", "success");
+
+                const doneMessage =
+                  progressData.mode === "chunked"
+                    ? "Chunked download ready. Click below to download the ZIP file."
+                    : "Download complete. Click below.";
+
+                setStatus(doneMessage, "success");
                 downloadLink.href = `/api/download/${jobId}`;
                 downloadLink.classList.add("show");
                 startBtn.disabled = false;
@@ -942,6 +1000,7 @@
       });
 
       renderQualities(["720", "1080", "best"]);
+      syncChunkUi();
     </script>
   </body>
 </html>

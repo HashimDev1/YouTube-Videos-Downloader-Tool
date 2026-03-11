@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import sanitize from "sanitize-filename";
 import { spawn } from "child_process";
 import crypto from "crypto";
+import archiver from "archiver";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,7 +38,10 @@ function createJob() {
     status: "queued",
     progress: 0,
     file: null,
+    files: [],
+    archive: null,
     error: null,
+    mode: "single",
   });
   return id;
 }
@@ -54,7 +58,7 @@ function formatDuration(seconds) {
   const total = Number(seconds);
   const hrs = Math.floor(total / 3600);
   const mins = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
+  const secs = Math.floor(total % 60);
 
   if (hrs > 0) {
     return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
@@ -134,6 +138,130 @@ function runYtDlpJson(url) {
   });
 }
 
+function runCommand(command, args, onStdout, onStderr) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    child.stdout.on("data", (chunk) => {
+      if (onStdout) onStdout(chunk.toString());
+    });
+
+    child.stderr.on("data", (chunk) => {
+      if (onStderr) onStderr(chunk.toString());
+    });
+
+    child.on("error", reject);
+
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${command} failed with code ${code}`));
+    });
+  });
+}
+
+function splitVideoIntoChunks(
+  inputFile,
+  outputDir,
+  safeBaseName,
+  chunkSeconds,
+) {
+  return new Promise((resolve, reject) => {
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const ext = path.extname(inputFile) || ".mp4";
+    const pattern = path.join(outputDir, `${safeBaseName}-part-%03d${ext}`);
+
+    const ffmpegArgs = [
+      "-i",
+      inputFile,
+      "-c",
+      "copy",
+      "-map",
+      "0",
+      "-f",
+      "segment",
+      "-segment_time",
+      String(chunkSeconds),
+      "-reset_timestamps",
+      "1",
+      pattern,
+    ];
+
+    const child = spawn("ffmpeg", ffmpegArgs, {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stderr = "";
+
+    child.stdout.on("data", () => {});
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", () => {
+      reject(new Error("Could not start ffmpeg."));
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(stderr || "ffmpeg split failed."));
+      }
+
+      const files = fs
+        .readdirSync(outputDir)
+        .filter((name) => name.startsWith(`${safeBaseName}-part-`))
+        .sort()
+        .map((name) => path.join(outputDir, name));
+
+      if (!files.length) {
+        return reject(new Error("No chunk files were created."));
+      }
+
+      resolve(files);
+    });
+  });
+}
+
+function zipFiles(zipPath, files) {
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver("zip", { zlib: { level: 9 } });
+
+    output.on("close", resolve);
+    output.on("error", reject);
+    archive.on("error", reject);
+
+    archive.pipe(output);
+
+    for (const file of files) {
+      archive.file(file, { name: path.basename(file) });
+    }
+
+    archive.finalize();
+  });
+}
+
+function cleanupJobFiles(job) {
+  const allFiles = [];
+
+  if (job?.file) allFiles.push(job.file);
+  if (job?.archive) allFiles.push(job.archive);
+  if (Array.isArray(job?.files)) allFiles.push(...job.files);
+
+  for (const file of allFiles) {
+    if (file && fs.existsSync(file)) {
+      fs.unlink(file, () => {});
+    }
+  }
+}
+
 app.post("/api/info", async (req, res) => {
   const { url } = req.body;
 
@@ -172,8 +300,14 @@ app.post("/api/info", async (req, res) => {
   }
 });
 
-app.post("/api/start", (req, res) => {
-  const { url, format, quality = "1080" } = req.body;
+app.post("/api/start", async (req, res) => {
+  const {
+    url,
+    format,
+    quality = "1080",
+    chunk_enabled = false,
+    chunk_duration_seconds = 120,
+  } = req.body;
 
   if (!url || !isValidUrl(url)) {
     return res.status(400).json({ error: "Invalid URL" });
@@ -199,118 +333,136 @@ app.post("/api/start", (req, res) => {
     return res.status(400).json({ error: "Invalid quality" });
   }
 
+  const chunkSeconds = Number(chunk_duration_seconds);
+
+  if (
+    chunk_enabled &&
+    (format !== "mp4" || !Number.isFinite(chunkSeconds) || chunkSeconds < 10)
+  ) {
+    return res.status(400).json({
+      error:
+        "Chunking is only supported for MP4 and must be at least 10 seconds.",
+    });
+  }
+
   const jobId = createJob();
-  const safeName = sanitize(`video-${Date.now()}`);
+  const safeName = sanitize(`video-${Date.now()}`) || `video-${Date.now()}`;
   const outputTemplate = path.join(
     downloadsDir,
     `${safeName}-${jobId}.%(ext)s`,
   );
+  const command = process.platform === "win32" ? "py" : "python3";
 
-  const args = [
-    "-m",
-    "yt_dlp",
-    "--js-runtimes",
-    "node",
-    "--newline",
-    "-o",
-    outputTemplate,
-  ];
+  res.json({ jobId });
 
-  if (format === "mp4") {
-    if (quality === "best") {
-      args.push(
-        "-f",
-        "bestvideo+bestaudio/best",
-        "-S",
-        "res,fps,vcodec:avc1,acodec:m4a",
-        "--merge-output-format",
-        "mp4",
-      );
+  try {
+    const args = [
+      "-m",
+      "yt_dlp",
+      "--js-runtimes",
+      "node",
+      "--newline",
+      "-o",
+      outputTemplate,
+    ];
+
+    if (format === "mp4") {
+      if (quality === "best") {
+        args.push(
+          "-f",
+          "bestvideo+bestaudio/best",
+          "-S",
+          "res,fps,vcodec:avc1,acodec:m4a",
+          "--merge-output-format",
+          "mp4",
+        );
+      } else {
+        args.push(
+          "-f",
+          `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`,
+          "-S",
+          "res,fps,vcodec:avc1,acodec:m4a",
+          "--merge-output-format",
+          "mp4",
+        );
+      }
     } else {
       args.push(
         "-f",
-        `bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}]/best`,
-        "-S",
-        "res,fps,vcodec:avc1,acodec:m4a",
-        "--merge-output-format",
-        "mp4",
+        "bestaudio/best",
+        "-x",
+        "--audio-format",
+        "mp3",
+        "--audio-quality",
+        "0",
       );
     }
-  } else {
-    args.push(
-      "-f",
-      "bestaudio/best",
-      "-x",
-      "--audio-format",
-      "mp3",
-      "--audio-quality",
-      "0",
+
+    args.push(url);
+
+    updateJob(jobId, {
+      status: "downloading",
+      progress: 0,
+      mode: chunk_enabled ? "chunked" : "single",
+    });
+
+    let detectedFile = null;
+
+    await runCommand(
+      command,
+      args,
+      (text) => {
+        console.log(text);
+
+        const progressMatch = text.match(/(\d{1,3}(?:\.\d+)?)%/);
+        if (progressMatch) {
+          const raw = parseFloat(progressMatch[1]);
+          const scaled = chunk_enabled ? Math.min(raw * 0.8, 80) : raw;
+          updateJob(jobId, { progress: scaled });
+        }
+
+        const destinationMatch = text.match(/Destination:\s(.+)/);
+        if (destinationMatch) {
+          detectedFile = destinationMatch[1].trim();
+          updateJob(jobId, { file: detectedFile });
+        }
+
+        const mergeMatch = text.match(/Merging formats into "(.+)"/);
+        if (mergeMatch) {
+          detectedFile = mergeMatch[1].trim();
+          updateJob(jobId, { file: detectedFile });
+        }
+
+        const extractMatch = text.match(/\[ExtractAudio\] Destination:\s(.+)/);
+        if (extractMatch) {
+          detectedFile = extractMatch[1].trim();
+          updateJob(jobId, { file: detectedFile });
+        }
+      },
+      (text) => {
+        console.error(text);
+
+        if (text.includes("No module named yt_dlp")) {
+          updateJob(jobId, {
+            status: "error",
+            error: "yt-dlp is not installed.",
+          });
+        } else if (text.toLowerCase().includes("ffmpeg")) {
+          updateJob(jobId, {
+            status: "error",
+            error: "ffmpeg is missing.",
+          });
+        } else if (text.includes("Requested format is not available")) {
+          updateJob(jobId, {
+            status: "error",
+            error: "Requested quality is not available for this video.",
+          });
+        }
+      },
     );
-  }
 
-  args.push(url);
+    let finalFile = detectedFile;
 
-  const command = process.platform === "win32" ? "py" : "python3";
-
-  const child = spawn(command, args, {
-    shell: false,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  updateJob(jobId, { status: "downloading" });
-
-  child.stdout.on("data", (chunk) => {
-    const text = chunk.toString();
-    console.log(text);
-
-    const progressMatch = text.match(/(\d{1,3}(?:\.\d+)?)%/);
-    if (progressMatch) {
-      updateJob(jobId, { progress: parseFloat(progressMatch[1]) });
-    }
-
-    const destinationMatch = text.match(/Destination:\s(.+)/);
-    if (destinationMatch) {
-      updateJob(jobId, { file: destinationMatch[1].trim() });
-    }
-
-    const mergeMatch = text.match(/Merging formats into "(.+)"/);
-    if (mergeMatch) {
-      updateJob(jobId, { file: mergeMatch[1].trim() });
-    }
-
-    const extractMatch = text.match(/\[ExtractAudio\] Destination:\s(.+)/);
-    if (extractMatch) {
-      updateJob(jobId, { file: extractMatch[1].trim() });
-    }
-  });
-
-  child.stderr.on("data", (chunk) => {
-    const text = chunk.toString();
-    console.error(text);
-
-    if (text.includes("No module named yt_dlp")) {
-      updateJob(jobId, {
-        status: "error",
-        error: "yt-dlp is not installed.",
-      });
-    } else if (text.toLowerCase().includes("ffmpeg")) {
-      updateJob(jobId, {
-        status: "error",
-        error: "ffmpeg is missing.",
-      });
-    } else if (text.includes("Requested format is not available")) {
-      updateJob(jobId, {
-        status: "error",
-        error: "Requested quality is not available for this video.",
-      });
-    }
-  });
-
-  child.on("close", (code) => {
-    const job = jobs.get(jobId);
-
-    let finalFile = job?.file;
     if (!finalFile) {
       const files = fs
         .readdirSync(downloadsDir)
@@ -322,31 +474,62 @@ app.post("/api/start", (req, res) => {
       }
     }
 
-    if (code === 0 && finalFile && fs.existsSync(finalFile)) {
+    if (!finalFile || !fs.existsSync(finalFile)) {
+      throw new Error("Download finished but output file was not found.");
+    }
+
+    if (chunk_enabled && format === "mp4") {
+      updateJob(jobId, {
+        status: "splitting",
+        progress: 85,
+        file: finalFile,
+      });
+
+      const chunkDir = path.join(downloadsDir, `${safeName}-${jobId}-chunks`);
+      const chunkBaseName =
+        sanitize(path.parse(finalFile).name) || `chunk-${jobId}`;
+
+      const chunkFiles = await splitVideoIntoChunks(
+        finalFile,
+        chunkDir,
+        chunkBaseName,
+        chunkSeconds,
+      );
+
+      updateJob(jobId, {
+        status: "archiving",
+        progress: 93,
+        files: chunkFiles,
+      });
+
+      const zipPath = path.join(downloadsDir, `${chunkBaseName}-chunks.zip`);
+      await zipFiles(zipPath, chunkFiles);
+
+      updateJob(jobId, {
+        status: "finished",
+        progress: 100,
+        file: zipPath,
+        archive: zipPath,
+        files: chunkFiles,
+      });
+    } else {
       updateJob(jobId, {
         status: "finished",
         progress: 100,
         file: finalFile,
       });
-    } else {
-      const currentJob = jobs.get(jobId);
-      if (!currentJob?.error) {
-        updateJob(jobId, {
-          status: "error",
-          error: "Download failed.",
-        });
-      }
     }
-  });
+  } catch (error) {
+    console.error(error);
 
-  child.on("error", () => {
-    updateJob(jobId, {
-      status: "error",
-      error: "Could not start Python/yt-dlp.",
-    });
-  });
-
-  res.json({ jobId });
+    const currentJob = jobs.get(jobId);
+    if (!currentJob?.error) {
+      updateJob(jobId, {
+        status: "error",
+        error: error.message || "Download failed.",
+      });
+    }
+  }
 });
 
 app.get("/api/progress/:jobId", (req, res) => {
@@ -372,17 +555,24 @@ app.get("/api/download/:jobId", (req, res) => {
     return res.status(400).send("File not ready");
   }
 
-  res.download(job.file, (err) => {
+  const downloadName =
+    job.mode === "chunked"
+      ? path.basename(job.file).endsWith(".zip")
+        ? path.basename(job.file)
+        : `${path.parse(job.file).name}.zip`
+      : path.basename(job.file);
+
+  res.download(job.file, downloadName, (err) => {
     if (err) {
       console.error("Download send error:", err);
       return;
     }
 
-    fs.unlink(job.file, (unlinkErr) => {
-      if (unlinkErr) {
-        console.error("Failed to delete file:", unlinkErr);
-      }
-    });
+    cleanupJobFiles(job);
+
+    if (job.file && fs.existsSync(job.file)) {
+      fs.unlink(job.file, () => {});
+    }
 
     jobs.delete(jobId);
   });
