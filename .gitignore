@@ -1,3 +1,4 @@
-node_modules
-downloads
+node_modules/
+downloads/
+cookies.txt
 .env
