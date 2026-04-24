@@ -13,10 +13,29 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+const isWindows = process.platform === "win32";
+
+// Local Windows:
+//   FFmpeg: C:\ffmpeg\bin
+//   Downloads: D:\YoutubeDownloads
+//
+// Render/Linux:
+//   FFmpeg: ffmpeg from system PATH
+//   Downloads: /tmp/downloads
+const FFMPEG_DIR =
+  process.env.FFMPEG_DIR || (isWindows ? "C:\\ffmpeg\\bin" : "");
+
+const FFMPEG_EXE =
+  process.env.FFMPEG_EXE ||
+  (isWindows ? "C:\\ffmpeg\\bin\\ffmpeg.exe" : "ffmpeg");
+
+const downloadsDir =
+  process.env.DOWNLOADS_DIR ||
+  (isWindows ? "D:\\YoutubeDownloads" : "/tmp/downloads");
+
+app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-const downloadsDir = process.env.DOWNLOADS_DIR || "/tmp/downloads";
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }
@@ -89,13 +108,26 @@ function extractQualities(formats = []) {
   return sorted;
 }
 
+function getPythonCommandAndBaseArgs() {
+  if (isWindows) {
+    return {
+      command: "py",
+      baseArgs: ["-3.14", "-m", "yt_dlp"],
+    };
+  }
+
+  return {
+    command: "python3",
+    baseArgs: ["-m", "yt_dlp"],
+  };
+}
+
 function runYtDlpJson(url) {
   return new Promise((resolve, reject) => {
-    const command = process.platform === "win32" ? "py" : "python3";
+    const { command, baseArgs } = getPythonCommandAndBaseArgs();
 
     const args = [
-      "-m",
-      "yt_dlp",
+      ...baseArgs,
       "--js-runtimes",
       "node",
       "--dump-single-json",
@@ -120,8 +152,8 @@ function runYtDlpJson(url) {
       stderr += chunk.toString();
     });
 
-    child.on("error", () => {
-      reject(new Error("Could not start yt-dlp."));
+    child.on("error", (error) => {
+      reject(new Error(`Could not start yt-dlp: ${error.message}`));
     });
 
     child.on("close", (code) => {
@@ -163,12 +195,7 @@ function runCommand(command, args, onStdout, onStderr) {
   });
 }
 
-function splitVideoIntoChunks(
-  inputFile,
-  outputDir,
-  safeBaseName,
-  chunkSeconds,
-) {
+function splitVideoIntoChunks(inputFile, outputDir, safeBaseName, chunkSeconds) {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(outputDir, { recursive: true });
 
@@ -191,7 +218,7 @@ function splitVideoIntoChunks(
       pattern,
     ];
 
-    const child = spawn("ffmpeg", ffmpegArgs, {
+    const child = spawn(FFMPEG_EXE, ffmpegArgs, {
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -206,7 +233,7 @@ function splitVideoIntoChunks(
     });
 
     child.on("error", () => {
-      reject(new Error("Could not start ffmpeg."));
+      reject(new Error("Could not start ffmpeg. Check FFMPEG_EXE path."));
     });
 
     child.on("close", (code) => {
@@ -262,6 +289,15 @@ function cleanupJobFiles(job) {
   }
 }
 
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    platform: process.platform,
+    downloadsDir,
+    ffmpeg: FFMPEG_EXE,
+  });
+});
+
 app.post("/api/info", async (req, res) => {
   const { url } = req.body;
 
@@ -293,9 +329,10 @@ app.post("/api/info", async (req, res) => {
       qualities,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Info error:", error.message);
+
     return res.status(500).json({
-      error: "Could not fetch video details.",
+      error: error.message || "Could not fetch video details.",
     });
   }
 });
@@ -347,24 +384,29 @@ app.post("/api/start", async (req, res) => {
 
   const jobId = createJob();
   const safeName = sanitize(`video-${Date.now()}`) || `video-${Date.now()}`;
+
   const outputTemplate = path.join(
     downloadsDir,
     `${safeName}-${jobId}.%(ext)s`,
   );
-  const command = process.platform === "win32" ? "py" : "python3";
+
+  const { command, baseArgs } = getPythonCommandAndBaseArgs();
 
   res.json({ jobId });
 
   try {
     const args = [
-      "-m",
-      "yt_dlp",
+      ...baseArgs,
       "--js-runtimes",
       "node",
       "--newline",
       "-o",
       outputTemplate,
     ];
+
+    if (FFMPEG_DIR) {
+      args.push("--ffmpeg-location", FFMPEG_DIR);
+    }
 
     if (format === "mp4") {
       if (quality === "best") {
@@ -442,12 +484,20 @@ app.post("/api/start", async (req, res) => {
       (text) => {
         console.error(text);
 
+        const lowerText = text.toLowerCase();
+
         if (text.includes("No module named yt_dlp")) {
           updateJob(jobId, {
             status: "error",
             error: "yt-dlp is not installed.",
           });
-        } else if (text.toLowerCase().includes("ffmpeg")) {
+        } else if (
+          lowerText.includes("ffmpeg is not installed") ||
+          lowerText.includes("ffmpeg not found") ||
+          lowerText.includes("ffprobe and ffmpeg not found") ||
+          lowerText.includes("unable to find ffmpeg") ||
+          lowerText.includes("could not start ffmpeg")
+        ) {
           updateJob(jobId, {
             status: "error",
             error: "ffmpeg is missing.",
@@ -456,6 +506,17 @@ app.post("/api/start", async (req, res) => {
           updateJob(jobId, {
             status: "error",
             error: "Requested quality is not available for this video.",
+          });
+        } else if (
+          lowerText.includes("sign in to confirm") ||
+          lowerText.includes("confirm you’re not a bot") ||
+          lowerText.includes("confirm you're not a bot") ||
+          lowerText.includes("this video is unavailable")
+        ) {
+          updateJob(jobId, {
+            status: "error",
+            error:
+              "YouTube blocked this request on the server. Try another video or check Render logs.",
           });
         }
       },
@@ -520,7 +581,7 @@ app.post("/api/start", async (req, res) => {
       });
     }
   } catch (error) {
-    console.error(error);
+    console.error("Download error:", error.message);
 
     const currentJob = jobs.get(jobId);
     if (!currentJob?.error) {
