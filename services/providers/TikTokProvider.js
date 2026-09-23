@@ -85,7 +85,7 @@ export default class TikTokProvider extends BaseProvider {
       args.push("--merge-output-format", "mp4");
     }
 
-    args.push(url);
+    args.push("--", url);
     return args;
   }
 }

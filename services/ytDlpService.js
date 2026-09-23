@@ -46,6 +46,8 @@ export function runYtDlpJson(url) {
 
     const args = [
       ...baseArgs,
+      "--remote-components",
+      "ejs:github",
       "--extractor-args",
       "youtube:player_client=android,web",
       "--js-runtimes",
@@ -62,7 +64,7 @@ export function runYtDlpJson(url) {
       args.push("--proxy", process.env.YOUTUBE_PROXY);
     }
 
-    args.push(url);
+    args.push("--", url);
 
     const child = spawn(command, args, {
       shell: false,
@@ -108,6 +110,8 @@ export function buildDownloadArgs({
 }) {
   const args = [
     ...baseArgs,
+    "--remote-components",
+    "ejs:github",
     "--js-runtimes",
     "node",
     "--newline",
@@ -159,7 +163,7 @@ export function buildDownloadArgs({
     );
   }
 
-  args.push(url);
+  args.push("--", url);
 
   return args;
 }

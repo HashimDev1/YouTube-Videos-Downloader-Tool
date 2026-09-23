@@ -21,6 +21,8 @@ export default class YouTubeProvider extends BaseProvider {
   buildDownloadArgs({ baseArgs, outputTemplate, format, quality, url }) {
     const args = [
       ...baseArgs,
+      "--remote-components",
+      "ejs:github",
       "--extractor-args",
       "youtube:player_client=android,web",
       "--js-runtimes",
@@ -74,7 +76,7 @@ export default class YouTubeProvider extends BaseProvider {
       );
     }
 
-    args.push(url);
+    args.push("--", url);
     return args;
   }
 }

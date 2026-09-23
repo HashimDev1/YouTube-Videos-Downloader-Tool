@@ -106,7 +106,7 @@ export default class FacebookProvider extends BaseProvider {
       );
     }
 
-    args.push(url);
+    args.push("--", url);
     return args;
   }
 }
