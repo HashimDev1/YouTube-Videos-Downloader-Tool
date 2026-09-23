@@ -8,9 +8,9 @@ import { createJob, updateJob, jobs, cleanupJobFiles } from "../utils/jobs.js";
 import { isValidUrl, isValidFormat, isValidQuality } from "../utils/validators.js";
 import {
   getPythonCommandAndBaseArgs,
-  buildDownloadArgs,
   runCommand,
 } from "../services/ytDlpService.js";
+import { getProvider } from "../services/providers/index.js";
 import { splitVideoIntoChunks } from "../services/ffmpegService.js";
 import { zipFiles } from "../services/zipService.js";
 
@@ -59,10 +59,17 @@ router.post("/start", async (req, res) => {
     quality = "1080",
     chunk_enabled = false,
     chunk_duration_seconds = 120,
+    title,
+    thumbnail,
   } = req.body;
 
   if (!url || !isValidUrl(url)) {
     return res.status(400).json({ error: "Invalid URL" });
+  }
+
+  const provider = getProvider(url);
+  if (!provider) {
+    return res.status(400).json({ error: "Unsupported platform. Please enter a valid YouTube, Facebook, or TikTok URL." });
   }
 
   if (!isValidFormat(format)) {
@@ -98,7 +105,7 @@ router.post("/start", async (req, res) => {
   res.json({ jobId });
 
   try {
-    const args = buildDownloadArgs({
+    const args = provider.buildDownloadArgs({
       baseArgs,
       outputTemplate,
       format,
@@ -110,6 +117,14 @@ router.post("/start", async (req, res) => {
       status: "downloading",
       progress: 0,
       mode: chunk_enabled ? "chunked" : "single",
+      title: title || "Unknown Title",
+      thumbnail: thumbnail || "",
+      platform: provider.name,
+      format,
+      quality,
+      speed: "0 KB/s",
+      eta: "--:--",
+      fileSize: "Unknown size",
     });
 
     let detectedFile = null;
@@ -125,6 +140,21 @@ router.post("/start", async (req, res) => {
           const raw = parseFloat(progressMatch[1]);
           const scaled = chunk_enabled ? Math.min(raw * 0.8, 80) : raw;
           updateJob(jobId, { progress: scaled });
+        }
+
+        const sizeMatch = text.match(/of\s+(?:~)?([\d.]+[KMG]i?B)/);
+        if (sizeMatch) {
+          updateJob(jobId, { fileSize: sizeMatch[1] });
+        }
+
+        const speedMatch = text.match(/at\s+([\d.]+[KMG]i?B\/s)/);
+        if (speedMatch) {
+          updateJob(jobId, { speed: speedMatch[1] });
+        }
+
+        const etaMatch = text.match(/ETA\s+(\d{2}:\d{2}(?::\d{2})?|\d+\s+seconds?)/);
+        if (etaMatch) {
+          updateJob(jobId, { eta: etaMatch[1] });
         }
 
         const destinationMatch = text.match(/Destination:\s(.+)/);
@@ -251,29 +281,22 @@ router.get("/download/:jobId", (req, res) => {
     !job.file ||
     !fs.existsSync(job.file)
   ) {
-    return res.status(400).send("File not ready");
+    return res.status(404).send("File not found or expired. Please download again.");
   }
+
+  const ext = path.extname(job.file) || (job.format === "mp3" ? ".mp3" : ".mp4");
+  const cleanTitle = (sanitize(job.title || "video").trim().replace(/\s+/g, " ") || "video")
+    .replace(/[^\w\s.-]/gi, "");
 
   const downloadName =
     job.mode === "chunked"
-      ? path.basename(job.file).endsWith(".zip")
-        ? path.basename(job.file)
-        : `${path.parse(job.file).name}.zip`
-      : path.basename(job.file);
+      ? `${cleanTitle}-chunks.zip`
+      : `${cleanTitle}${ext}`;
 
   res.download(job.file, downloadName, (err) => {
-    if (err) {
+    if (err && !res.headersSent) {
       console.error("Download send error:", err);
-      return;
     }
-
-    cleanupJobFiles(job);
-
-    if (job.file && fs.existsSync(job.file)) {
-      fs.unlink(job.file, () => {});
-    }
-
-    jobs.delete(jobId);
   });
 });
 

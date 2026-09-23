@@ -3,18 +3,42 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>YouTube Downloader Tool</title>
+    <title>VidForge — Social Media Video Downloader</title>
+
+    <!-- Google Fonts: Inter, Playfair Display, Space Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Playfair+Display:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+
     <link rel="stylesheet" href="./css/style.css" />
   </head>
 
   <body>
+    <!-- Toast notifications overlay -->
+    <div class="toast-container" id="toastContainer"></div>
+
     <div class="container">
+
+      <!-- Top Status Bar (VoiceForge style) -->
+      <div class="top-status-bar">
+        <span>Multi-Platform Downloader</span>
+        <div class="version-badge">
+          <span class="version-tag">tool</span>
+          <span class="version-number">v2.0.0</span>
+        </div>
+      </div>
+
+      <!-- Hero Section (VoiceForge style) -->
       <div class="hero">
-        <div class="badge">Fast • Clean • MP4 • MP3</div>
-        <h1>Download YouTube Videos<br />with a Cleaner Experience</h1>
+        <div class="brand-icon">◆</div>
+        <div class="badge">YouTube • Facebook • TikTok</div>
+        <h1>VidForge.</h1>
         <p>
-          Paste a YouTube link, preview the video, choose MP4 or MP3, select
-          quality, and optionally split long MP4 videos into smaller parts.
+          Paste any YouTube, Facebook, or TikTok link, preview it instantly, choose formats and qualities,
+          manage concurrent downloads in the queue, and filter your download history.
         </p>
       </div>
 
@@ -22,13 +46,15 @@
         <div class="top">
           <div class="input-wrap">
             <div class="url-box">
+              <div class="platform-icon-indicator" id="platformIconIndicator"></div>
               <input
                 id="url"
                 type="url"
-                placeholder="Paste YouTube link here..."
+                placeholder="Paste YouTube, Facebook, or TikTok link here..."
+                style="padding-left: 54px;"
               />
             </div>
-            <button id="fetchBtn" class="btn btn-secondary">Get Info</button>
+            <button id="fetchBtn" class="btn btn-secondary">GET INFO</button>
           </div>
 
           <div class="controls">
@@ -49,7 +75,7 @@
               </select>
             </div>
 
-            <div class="field">
+            <div class="field" id="chunkField">
               <label for="chunkEnabled">Chunk Video</label>
               <select id="chunkEnabled">
                 <option value="false" selected>No</option>
@@ -57,7 +83,7 @@
               </select>
             </div>
 
-            <div class="field">
+            <div class="field" id="chunkDurationField">
               <label for="chunkDuration">Chunk Length</label>
               <select id="chunkDuration">
                 <option value="90">1.5 min</option>
@@ -65,15 +91,35 @@
                 <option value="180">3 min</option>
               </select>
             </div>
+
+            <!-- TikTok specific Watermark option -->
+            <div class="field" id="tiktokWatermarkField" style="display: none;">
+              <label for="tiktokWatermark">Watermark</label>
+              <select id="tiktokWatermark">
+                <option value="true" selected>Watermark-free</option>
+                <option value="false">Original (With Watermark)</option>
+              </select>
+            </div>
           </div>
         </div>
 
         <div class="content">
-          <div>
+          <div class="content-left">
+            <!-- Skeleton Loader for preview -->
+            <div class="card preview-skeleton" id="previewSkeleton" style="display: none;">
+              <div class="skeleton-thumb"></div>
+              <div class="skeleton-body">
+                <div class="skeleton-line title"></div>
+                <div class="skeleton-line pill-row"></div>
+                <div class="skeleton-line text"></div>
+              </div>
+            </div>
+
             <div class="card preview" id="previewCard">
               <div class="thumb">
                 <img id="thumbnail" alt="Video thumbnail" />
                 <div class="duration-badge" id="durationBadge">--:--</div>
+                <span class="platform-badge" id="platformBadge">YouTube</span>
               </div>
 
               <div class="video-body">
@@ -86,7 +132,7 @@
                 </div>
 
                 <div class="empty" id="videoDescription">
-                  Paste a valid YouTube link and click “Get Info”.
+                  Paste a valid link and click "Get Info".
                 </div>
               </div>
             </div>
@@ -94,21 +140,21 @@
             <div class="grid-mini">
               <div class="mini-card">
                 <div class="k">Preview</div>
-                <div class="v">Fetch video title, thumbnail, and details</div>
+                <div class="v">Fetch title, thumbnail &amp; details</div>
               </div>
               <div class="mini-card">
-                <div class="k">Formats</div>
-                <div class="v">Download MP4 video or MP3 audio</div>
+                <div class="k">Platforms</div>
+                <div class="v">YouTube, Facebook &amp; TikTok</div>
               </div>
               <div class="mini-card">
-                <div class="k">Chunk Mode</div>
-                <div class="v">Split long MP4 into smaller ZIP parts</div>
+                <div class="k">Queue Mode</div>
+                <div class="v">Download multiple videos</div>
               </div>
             </div>
           </div>
 
           <div class="card side-card">
-            <h3 class="section-title">Available qualities</h3>
+            <h3 class="section-title">Available Qualities.</h3>
             <div class="section-sub">
               After fetching video info, the available qualities will appear
               here.
@@ -131,11 +177,11 @@
               </div>
 
               <button id="startBtn" class="btn btn-primary full-btn">
-                Download Now
+                DOWNLOAD NOW
               </button>
 
               <a id="downloadLink" class="btn btn-secondary download-link" href="#">
-                Download file
+                DOWNLOAD FILE
               </a>
 
               <div class="hint" id="hint">
@@ -145,11 +191,59 @@
             </div>
           </div>
         </div>
+
+        <!-- Download Queue Section -->
+        <div class="queue-section" id="queueSection">
+          <h3 class="section-title">Active Downloads.</h3>
+          <div class="queue-list" id="queueList">
+            <div class="empty-queue" id="emptyQueue">No active downloads in the queue.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- History Section -->
+      <div class="card panel-history" id="historySection">
+        <div class="history-header">
+          <h3 class="section-title">Download History.</h3>
+          <div class="history-filters">
+            <label for="historyFilter">Platform</label>
+            <select id="historyFilter">
+              <option value="all">All Platforms</option>
+              <option value="YouTube">YouTube</option>
+              <option value="Facebook">Facebook</option>
+              <option value="TikTok">TikTok</option>
+            </select>
+            <button class="btn-clear-history" id="clearHistoryBtn">Clear</button>
+          </div>
+        </div>
+        <div class="history-table-wrapper">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>Platform</th>
+                <th>Thumbnail</th>
+                <th>Title</th>
+                <th>Format/Quality</th>
+                <th>Size</th>
+                <th>Date</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="historyList">
+              <tr class="empty-row"><td colspan="7">No download history yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Footer (VoiceForge style) -->
+      <div class="footer-section">
+        <p class="footer-brand">© 2026 VidForge Studio</p>
+        <p class="footer-tagline">Social Media Video Downloader Tool</p>
       </div>
 
       <p class="footer-note">
-        Note: On cloud hosting, some videos may be blocked by YouTube bot
-        verification. Local setup usually works better.
+        Note: The app works locally, but cloud servers may trigger platform bot verification.
       </p>
     </div>
 

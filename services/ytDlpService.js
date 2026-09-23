@@ -46,6 +46,8 @@ export function runYtDlpJson(url) {
 
     const args = [
       ...baseArgs,
+      "--extractor-args",
+      "youtube:player_client=android,web",
       "--js-runtimes",
       "node",
       "--dump-single-json",
@@ -54,6 +56,10 @@ export function runYtDlpJson(url) {
 
     if (hasCookies) {
       args.push("--cookies", COOKIES_FILE);
+    }
+
+    if (process.env.YOUTUBE_PROXY) {
+      args.push("--proxy", process.env.YOUTUBE_PROXY);
     }
 
     args.push(url);
@@ -115,6 +121,10 @@ export function buildDownloadArgs({
 
   if (hasCookies) {
     args.push("--cookies", COOKIES_FILE);
+  }
+
+  if (process.env.YOUTUBE_PROXY) {
+    args.push("--proxy", process.env.YOUTUBE_PROXY);
   }
 
   if (format === "mp4") {

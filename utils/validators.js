@@ -10,6 +10,8 @@ export const allowedQualities = [
   "1440",
   "2160",
   "best",
+  "original",
+  "hd",
 ];
 
 export function isValidUrl(value) {
