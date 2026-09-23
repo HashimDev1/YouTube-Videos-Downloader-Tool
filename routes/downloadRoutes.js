@@ -40,9 +40,10 @@ function getFriendlyError(text) {
   if (
     lowerText.includes("sign in to confirm") ||
     lowerText.includes("confirm you’re not a bot") ||
-    lowerText.includes("confirm you're not a bot")
+    lowerText.includes("confirm you're not a bot") ||
+    lowerText.includes("failed to extract any player response")
   ) {
-    return "YouTube blocked this cloud server request. The app works locally, but Render may be blocked by YouTube bot verification.";
+    return "YouTube blocked this cloud server request (bot verification). This app works 100% locally, or on Render by setting the YOUTUBE_COOKIES environment variable.";
   }
 
   if (lowerText.includes("this video is unavailable")) {

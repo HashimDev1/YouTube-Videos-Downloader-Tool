@@ -23,8 +23,6 @@ export default class YouTubeProvider extends BaseProvider {
       ...baseArgs,
       "--remote-components",
       "ejs:github",
-      "--extractor-args",
-      "youtube:player_client=android,web",
       "--js-runtimes",
       "node",
       "--newline",

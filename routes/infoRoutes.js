@@ -18,16 +18,11 @@ function getFriendlyInfoError(message = "") {
   if (
     lower.includes("sign in to confirm") ||
     lower.includes("confirm you’re not a bot") ||
-    lower.includes("confirm you're not a bot")
-  ) {
-    return "YouTube bot verification triggered. Cloud server IP may be temporarily blocked.";
-  }
-
-  if (
+    lower.includes("confirm you're not a bot") ||
     lower.includes("failed to extract any player response") ||
     lower.includes("player response")
   ) {
-    return "Could not retrieve video details from YouTube. The video may be restricted or unavailable.";
+    return "YouTube blocked this cloud server request (bot verification). This app works 100% locally, or on Render by setting the YOUTUBE_COOKIES environment variable.";
   }
 
   if (lower.includes("copyright") || lower.includes("account terminated")) {

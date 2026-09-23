@@ -48,8 +48,6 @@ export function runYtDlpJson(url) {
       ...baseArgs,
       "--remote-components",
       "ejs:github",
-      "--extractor-args",
-      "youtube:player_client=android,web",
       "--js-runtimes",
       "node",
       "--dump-single-json",
